@@ -332,7 +332,7 @@ public class ConfigurationType implements JsonPrintable {
                     if ((k == ConfigurationMemberKind.DECLARED || k == ConfigurationMemberKind.DECLARED_AND_PUBLIC) && configurationType.allDeclaredMethods) {
                         methods.remove(key);
                     } else if ((k == ConfigurationMemberKind.PUBLIC || k == ConfigurationMemberKind.DECLARED_AND_PUBLIC) &&
-                                    configurationType.allPublicMethods) {
+                                    (configurationType.allPublicMethods || configurationType.allDeclaredMethods)) {
                         methods.remove(key);
                     }
                 }
@@ -349,7 +349,7 @@ public class ConfigurationType implements JsonPrintable {
                                     configurationType.allDeclaredConstructors) {
                         toRemove2.add(e.getKey());
                     } else if ((k == ConfigurationMemberKind.PUBLIC || k == ConfigurationMemberKind.DECLARED_AND_PUBLIC) &&
-                                    configurationType.allPublicConstructors) {
+                                    (configurationType.allPublicConstructors || configurationType.allDeclaredConstructors)) {
                         toRemove2.add(e.getKey());
                     }
                 } else {
@@ -357,7 +357,7 @@ public class ConfigurationType implements JsonPrintable {
                                     configurationType.allDeclaredMethods) {
                         toRemove2.add(e.getKey());
                     } else if ((k == ConfigurationMemberKind.PUBLIC || k == ConfigurationMemberKind.DECLARED_AND_PUBLIC) &&
-                                    configurationType.allPublicMethods) {
+                                    (configurationType.allPublicMethods || configurationType.allDeclaredMethods)) {
                         toRemove2.add(e.getKey());
                     }
                 }
