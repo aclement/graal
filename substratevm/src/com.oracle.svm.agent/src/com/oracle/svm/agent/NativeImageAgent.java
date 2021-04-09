@@ -51,6 +51,9 @@ import org.graalvm.nativeimage.ProcessProperties;
 import org.graalvm.nativeimage.hosted.Feature;
 
 import com.oracle.svm.configure.config.ConfigurationSet;
+import com.oracle.svm.configure.config.ProxyConfiguration;
+import com.oracle.svm.configure.config.ResourceConfiguration;
+import com.oracle.svm.configure.config.TypeConfiguration;
 import com.oracle.svm.configure.filters.FilterConfigurationParser;
 import com.oracle.svm.configure.filters.RuleNode;
 import com.oracle.svm.configure.json.JsonPrintable;
@@ -81,6 +84,10 @@ public final class NativeImageAgent extends JvmtiAgentBase<NativeImageAgentJNIHa
     private Path configOutputDirPath;
 
     private AccessAdvisor accessAdvisor;
+
+    private boolean filterExisting = false;
+
+    private String classpath;
 
     private static String getTokenValue(String token) {
         return token.substring(token.indexOf('=') + 1);
@@ -131,6 +138,8 @@ public final class NativeImageAgent extends JvmtiAgentBase<NativeImageAgentJNIHa
                 builtinCallerFilter = false;
             } else if (token.startsWith("builtin-caller-filter=")) {
                 builtinCallerFilter = Boolean.parseBoolean(getTokenValue(token));
+            } else if (token.startsWith("filter-existing")) {
+                filterExisting = true;
             } else if (token.equals("no-builtin-heuristic-filter")) {
                 builtinHeuristicFilter = false;
             } else if (token.startsWith("builtin-heuristic-filter=")) {
@@ -171,6 +180,14 @@ public final class NativeImageAgent extends JvmtiAgentBase<NativeImageAgentJNIHa
         if (traceOutputFile == null && configOutputDir == null && !build) {
             configOutputDir = transformPath(AGENT_NAME + "_config-pid{pid}-{datetime}/");
             inform("no output/build options provided, tracking dynamic accesses and writing configuration to directory: " + configOutputDir);
+        }
+
+        if (filterExisting) {
+            classpath = Support.getSystemProperty(jvmti, "java.class.path");
+// List<Path> metaInfNativeImageFolders = Utils.getMetaInfNativeImageFolders(classpath);
+// for (Path metaInfNativeImageFolder : metaInfNativeImageFolders) {
+// mergeConfigs.addDirectory(metaInfNativeImageFolder);
+// }
         }
 
         RuleNode callerFilter = null;
@@ -238,7 +255,9 @@ public final class NativeImageAgent extends JvmtiAgentBase<NativeImageAgentJNIHa
             return status;
         }
 
-        accessAdvisor = createAccessAdvisor(builtinHeuristicFilter, callerFilter, accessFilter);
+        accessAdvisor =
+
+                        createAccessAdvisor(builtinHeuristicFilter, callerFilter, accessFilter);
         try {
             BreakpointInterceptor.onLoad(jvmti, callbacks, traceWriter, this, experimentalClassLoaderSupport);
         } catch (Throwable t) {
@@ -324,7 +343,7 @@ public final class NativeImageAgent extends JvmtiAgentBase<NativeImageAgentJNIHa
         });
         periodicConfigWriterExecutor.setRemoveOnCancelPolicy(true);
         periodicConfigWriterExecutor.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
-        periodicConfigWriterExecutor.scheduleAtFixedRate(this::writeConfigurationFiles,
+        periodicConfigWriterExecutor.scheduleAtFixedRate(() -> this.writeConfigurationFiles(classpath),// ::writeConfigurationFiles,
                         initialDelay, writePeriod, TimeUnit.SECONDS);
     }
 
@@ -412,7 +431,7 @@ public final class NativeImageAgent extends JvmtiAgentBase<NativeImageAgentJNIHa
     private static final int MAX_WARNINGS_FOR_WRITING_CONFIGS_FAILURES = 5;
     private static int currentFailuresWritingConfigs = 0;
 
-    private void writeConfigurationFiles() {
+    private void writeConfigurationFiles(String classpath) {
         try {
             final Path tempDirectory = configOutputDirPath.toFile().exists()
                             ? Files.createTempDirectory(configOutputDirPath, "tempConfig-")
@@ -420,10 +439,53 @@ public final class NativeImageAgent extends JvmtiAgentBase<NativeImageAgentJNIHa
             TraceProcessor p = ((TraceProcessorWriterAdapter) traceWriter).getProcessor();
 
             Map<String, JsonPrintable> allConfigFiles = new HashMap<>(4);
-            allConfigFiles.put(ConfigurationFiles.REFLECTION_NAME, p.getReflectionConfiguration());
-            allConfigFiles.put(ConfigurationFiles.JNI_NAME, p.getJniConfiguration());
-            allConfigFiles.put(ConfigurationFiles.DYNAMIC_PROXY_NAME, p.getProxyConfiguration());
-            allConfigFiles.put(ConfigurationFiles.RESOURCES_NAME, p.getResourceConfiguration());
+
+            if (filterExisting) {
+                System.out.println("FILTERING: removing entries from agent output that are already in config files on the classpath");
+                ConfigurationSet existing = new ConfigurationSet();
+
+                List<Path> metaInfNativeImageFolders = Utils.getMetaInfNativeImageFolders(classpath);
+                for (Path metaInfNativeImageFolder : metaInfNativeImageFolders) {
+                    existing.addDirectory(metaInfNativeImageFolder);
+                }
+                Function<IOException, Exception> handler = e -> {
+                    if (e instanceof NoSuchFileException) {
+                        System.err.println("warning: file " + ((NoSuchFileException) e).getFile() + " for merging could not be found, skipping");
+                        return null;
+                    }
+                    return e; // rethrow
+                };
+                try {
+                    TypeConfiguration existingJniConfig = existing.loadJniConfig(handler);
+                    TypeConfiguration existingReflectionConfig = existing.loadReflectConfig(handler);
+                    ProxyConfiguration existingProxyConfig = existing.loadProxyConfig(handler);
+                    ResourceConfiguration existingResourceConfig = existing.loadResourceConfig(handler);
+
+                    TypeConfiguration reflectionConfiguration = p.getReflectionConfiguration();
+                    reflectionConfiguration.subtract(existingReflectionConfig);
+                    TypeConfiguration jniConfiguration = p.getJniConfiguration();
+                    ProxyConfiguration proxyConfiguration = p.getProxyConfiguration();
+                    ResourceConfiguration resourceConfiguration = p.getResourceConfiguration();
+
+                    allConfigFiles.put(ConfigurationFiles.REFLECTION_NAME, reflectionConfiguration);
+                    allConfigFiles.put(ConfigurationFiles.JNI_NAME, jniConfiguration);
+                    allConfigFiles.put(ConfigurationFiles.DYNAMIC_PROXY_NAME, proxyConfiguration);
+                    allConfigFiles.put(ConfigurationFiles.RESOURCES_NAME, resourceConfiguration);
+                } catch (Exception ioe) {
+                    ioe.printStackTrace();
+                }
+
+            } else {
+                allConfigFiles.put(ConfigurationFiles.REFLECTION_NAME, p.getReflectionConfiguration());
+                allConfigFiles.put(ConfigurationFiles.JNI_NAME, p.getJniConfiguration());
+                allConfigFiles.put(ConfigurationFiles.DYNAMIC_PROXY_NAME, p.getProxyConfiguration());
+                allConfigFiles.put(ConfigurationFiles.RESOURCES_NAME, p.getResourceConfiguration());
+            }
+
+// allConfigFiles.put(ConfigurationFiles.REFLECTION_NAME, p.getReflectionConfiguration());
+// allConfigFiles.put(ConfigurationFiles.JNI_NAME, p.getJniConfiguration());
+// allConfigFiles.put(ConfigurationFiles.DYNAMIC_PROXY_NAME, p.getProxyConfiguration());
+// allConfigFiles.put(ConfigurationFiles.RESOURCES_NAME, p.getResourceConfiguration());
             allConfigFiles.put(ConfigurationFiles.SERIALIZATION_NAME, p.getSerializationConfiguration());
 
             for (Map.Entry<String, JsonPrintable> configFile : allConfigFiles.entrySet()) {
@@ -494,7 +556,7 @@ public final class NativeImageAgent extends JvmtiAgentBase<NativeImageAgentJNIHa
             traceWriter.tracePhaseChange("unload");
             traceWriter.close();
             if (configOutputDirPath != null) {
-                writeConfigurationFiles();
+                writeConfigurationFiles(classpath);
                 configOutputDirPath = null;
             }
             traceWriter = null;

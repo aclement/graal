@@ -25,9 +25,12 @@
 package com.oracle.svm.configure.config;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.function.Consumer;
 
 import com.oracle.svm.configure.json.JsonPrintable;
@@ -48,6 +51,14 @@ public class ConfigurationType implements JsonPrintable {
     private boolean allPublicMethods;
     private boolean allDeclaredConstructors;
     private boolean allPublicConstructors;
+
+    public int getFieldCount() {
+        return fields == null ? 0 : fields.size();
+    }
+
+    public int getMethodCount() {
+        return methods == null ? 0 : methods.size();
+    }
 
     public ConfigurationType(String qualifiedJavaName) {
         assert qualifiedJavaName.indexOf('/') == -1 : "Requires qualified Java name, not internal representation";
@@ -238,4 +249,124 @@ public class ConfigurationType implements JsonPrintable {
         }
         return map;
     }
+
+    public boolean hasFlagsSet() {
+        return allDeclaredClasses || allPublicClasses ||
+                        allDeclaredFields || allPublicFields ||
+                        allDeclaredMethods || allPublicMethods ||
+                        allDeclaredConstructors || allPublicConstructors;
+    }
+
+    public String toStringFlags() {
+        return "adc=" + allDeclaredClasses + " apc=" + allPublicClasses + " adf=" + allDeclaredFields + " apf=" + allPublicFields + " adm=" + allDeclaredMethods + " apm=" + allPublicMethods +
+                        "adc=" + allDeclaredConstructors + " apc=" + allPublicConstructors;
+    }
+
+    public void subtract(ConfigurationType configurationType) {
+        if (allDeclaredClasses && configurationType.allDeclaredClasses) {
+            allDeclaredClasses = false;
+        }
+        if (allPublicClasses && configurationType.allPublicClasses) {
+            allPublicClasses = false;
+        }
+        if (allDeclaredFields && configurationType.allDeclaredFields) {
+            allDeclaredFields = false;
+        }
+        if (allPublicFields && configurationType.allPublicFields) {
+            allPublicFields = false;
+        }
+        if (allDeclaredMethods && configurationType.allDeclaredMethods) {
+            allDeclaredMethods = false;
+        }
+        if (allPublicMethods && configurationType.allPublicMethods) {
+            allPublicMethods = false;
+        }
+        if (allDeclaredConstructors && configurationType.allDeclaredConstructors) {
+            allDeclaredConstructors = false;
+        }
+        if (allPublicConstructors && configurationType.allPublicConstructors) {
+            allPublicConstructors = false;
+        }
+
+        // Iterate over fields to remove, remove them if the configuration matches
+        if (configurationType.fields != null && fields != null) {
+            for (Map.Entry<String, FieldInfo> e : configurationType.fields.entrySet()) {
+                FieldInfo fi = fields.get(e.getKey());
+                if (fi.isFinalButWritable() == e.getValue().isFinalButWritable() && fi.isUnsafeAccessible() == e.getValue().isUnsafeAccessible()) {
+                    System.out.println("FILTERING: Deleting field entry for " + configurationType.getQualifiedJavaName() + "." + e.getKey());
+                    fields.remove(e.getKey());
+                }
+            }
+        }
+        List<String> toRemove = new ArrayList<>();
+        if (fields != null) {
+            for (Map.Entry<String, FieldInfo> e : fields.entrySet()) {
+                FieldInfo fi = e.getValue();
+                if (!fi.isFinalButWritable() && !fi.isUnsafeAccessible()) {
+                    // it may be disposed if the flags for the existing entry cover it
+                    ConfigurationMemberKind k = e.getValue().getKind();
+                    if ((k == ConfigurationMemberKind.DECLARED || k == ConfigurationMemberKind.DECLARED_AND_PUBLIC) &&
+                                    configurationType.allDeclaredFields) {
+                        toRemove.add(e.getKey());
+                    } else if ((k == ConfigurationMemberKind.PUBLIC || k == ConfigurationMemberKind.DECLARED_AND_PUBLIC) &&
+                                    configurationType.allPublicFields) {
+                        toRemove.add(e.getKey());
+                    }
+                }
+            }
+            for (String s : toRemove) {
+                System.out.println("FILTERING2: Deleting field entry for " + configurationType.getQualifiedJavaName() + "." + s);
+                fields.remove(s);
+            }
+        }
+        if (configurationType.methods != null && methods != null) {
+            for (Entry<ConfigurationMethod, ConfigurationMemberKind> e : configurationType.methods.entrySet()) {
+                ConfigurationMethod key = e.getKey();
+                ConfigurationMemberKind value = e.getValue();
+                ConfigurationMemberKind exists = methods.get(key);
+                if (exists != null) {
+                    System.out.println("FILTERING: Deleting method entry for " + configurationType.getQualifiedJavaName() + "." + key);
+                    methods.remove(key);
+                } else {
+                    ConfigurationMemberKind k = e.getValue();
+                    if ((k == ConfigurationMemberKind.DECLARED || k == ConfigurationMemberKind.DECLARED_AND_PUBLIC) && configurationType.allDeclaredMethods) {
+                        methods.remove(key);
+                    } else if ((k == ConfigurationMemberKind.PUBLIC || k == ConfigurationMemberKind.DECLARED_AND_PUBLIC) &&
+                                    configurationType.allPublicMethods) {
+                        methods.remove(key);
+                    }
+                }
+            }
+        }
+        List<ConfigurationMethod> toRemove2 = new ArrayList<>();
+        if (methods != null) {
+            for (Entry<ConfigurationMethod, ConfigurationMemberKind> e : methods.entrySet()) {
+                // it may be disposed if the flags for the existing entry cover it
+                ConfigurationMemberKind k = e.getValue();
+                boolean ctor = e.getKey().isConstructor();
+                if (ctor) {
+                    if ((k == ConfigurationMemberKind.DECLARED || k == ConfigurationMemberKind.DECLARED_AND_PUBLIC) &&
+                                    configurationType.allDeclaredConstructors) {
+                        toRemove2.add(e.getKey());
+                    } else if ((k == ConfigurationMemberKind.PUBLIC || k == ConfigurationMemberKind.DECLARED_AND_PUBLIC) &&
+                                    configurationType.allPublicConstructors) {
+                        toRemove2.add(e.getKey());
+                    }
+                } else {
+                    if ((k == ConfigurationMemberKind.DECLARED || k == ConfigurationMemberKind.DECLARED_AND_PUBLIC) &&
+                                    configurationType.allDeclaredMethods) {
+                        toRemove2.add(e.getKey());
+                    } else if ((k == ConfigurationMemberKind.PUBLIC || k == ConfigurationMemberKind.DECLARED_AND_PUBLIC) &&
+                                    configurationType.allPublicMethods) {
+                        toRemove2.add(e.getKey());
+                    }
+                }
+            }
+            for (ConfigurationMethod s : toRemove2) {
+                System.out.println("FILTERING2: Deleting method entry for " + configurationType.getQualifiedJavaName() + "." + s);
+                methods.remove(s);
+            }
+        }
+    }
+
 }

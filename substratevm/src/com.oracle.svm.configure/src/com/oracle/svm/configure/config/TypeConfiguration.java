@@ -28,6 +28,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map.Entry;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -86,5 +87,49 @@ public class TypeConfiguration implements JsonPrintable {
             prefix = ",\n";
         }
         writer.newline().append(']').newline();
+    }
+
+    /**
+     * If something is covered by the existingConfiguration parameter it will be removed from this
+     * type configuration object - leaving only the material the existing configuration does not
+     * cover.
+     */
+    public void subtract(TypeConfiguration existingTypeConfiguration) {
+        System.out.println("Number of entries in the configuration " + types.size());
+        System.out.println("Number of entries in the existing configuration " + existingTypeConfiguration.types.size());
+
+        // For extraction:
+        System.out.println("For extraction: " + existingTypeConfiguration.types.keySet());
+
+        System.out.println("Attempting subtraction of " + existingTypeConfiguration);
+        List<String> toRemove = new ArrayList<>();
+        for (Entry<String, ConfigurationType> entry : this.types.entrySet()) {
+            System.out.println("Checking if this is in existing configuration " + entry.getKey());
+            ConfigurationType configurationType = existingTypeConfiguration.get(entry.getKey());
+            if (configurationType != null) {
+                System.out.println("Yes it is!");
+                // This means there is potentially something to subtract
+                entry.getValue().subtract(configurationType);
+                // After subtraction, is it safe to remove it - I suppose it is if there are no
+                // flags set and no methods/fields
+                ConfigurationType ct = entry.getValue();
+                System.out.println("Post subtraction for " + ct.getQualifiedJavaName() + " fc=" + ct.getFieldCount() + " mc=" + ct.getMethodCount() + " cf.flags=" + ct.hasFlagsSet());
+                if (ct.hasFlagsSet()) {
+                    System.out.println("Flags are " + ct.toStringFlags());
+                }
+                if (ct.getFieldCount() == 0 && ct.getMethodCount() == 0 && !ct.hasFlagsSet()) {
+                    toRemove.add(entry.getKey());
+                } else {
+
+                }
+            } else {
+                System.out.println("No it is!");
+                // This means this is unique to the collected configuration, there is nothing remove
+            }
+        }
+        for (String s : toRemove) {
+            this.types.remove(s);
+        }
+        System.out.println("Number of entries in the configuration after subtraction " + types.size());
     }
 }
